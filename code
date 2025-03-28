@@ -1,0 +1,99 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.model_selection import RandomizedSearchCV
+import pickle
+from flask import Flask, request, jsonify
+
+# Load Dataset
+url = 'https://drive.google.com/uc?id=1yFuNVPXM5CH6g0TthYKcTGrZCCJo6n8Z'
+df = pd.read_csv(url)
+print(df.head())
+
+# Data Preprocessing
+# Handling missing values
+df.dropna(inplace=True)
+
+# Feature Engineering - Creating Car Age feature
+current_year = 2025  # Update accordingly
+df['Car_Age'] = current_year - df['Year']
+df.drop(columns=['Year'], inplace=True)  # Dropping Year column
+
+# Encoding Categorical Variables
+le = LabelEncoder()
+df['Fuel_Type'] = le.fit_transform(df['Fuel_Type'])
+df['Seller_Type'] = le.fit_transform(df['Seller_Type'])
+df['Transmission'] = le.fit_transform(df['Transmission'])
+
+# Define Features and Target
+X = df.drop(columns=['Selling_Price', 'Car_Name'])  # Drop irrelevant columns if present
+y = df['Selling_Price']
+
+# Splitting the Data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Feature Scaling
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# Model Selection & Training
+rf = RandomForestRegressor(n_estimators=100, random_state=42)
+rf.fit(X_train, y_train)
+
+# Predictions
+y_pred = rf.predict(X_test)
+
+# Model Evaluation
+mse = mean_squared_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+mae = mean_absolute_error(y_test, y_pred)
+print(f"MSE: {mse}, RMSE: {rmse}, MAE: {mae}")
+
+# Hyperparameter Tuning
+param_grid = {
+    'n_estimators': [50, 100, 200],
+    'max_depth': [None, 10, 20, 30],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+rf_random = RandomizedSearchCV(estimator=rf, param_distributions=param_grid, n_iter=10, cv=3, verbose=2, random_state=42, n_jobs=-1)
+rf_random.fit(X_train, y_train)
+
+# Best Model
+best_model = rf_random.best_estimator_
+y_best_pred = best_model.predict(X_test)
+best_mse = mean_squared_error(y_test, y_best_pred)
+best_rmse = np.sqrt(best_mse)
+best_mae = mean_absolute_error(y_test, y_best_pred)
+print(f"Optimized MSE: {best_mse}, RMSE: {best_rmse}, MAE: {best_mae}")
+
+# Deployment - Saving the Model
+pickle.dump(best_model, open("car_price_model.pkl", 'wb'))
+
+# Flask App for Deployment
+app = Flask(__name__)
+model = pickle.load(open('car_price_model.pkl', 'rb'))
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.get_json()
+    df = pd.DataFrame(data, index=[0])
+    df['Car_Age'] = current_year - df['Year']
+    df.drop(columns=['Year'], inplace=True)
+    df['Fuel_Type'] = le.transform(df['Fuel_Type'])
+    df['Seller_Type'] = le.transform(df['Seller_Type'])
+    df['Transmission'] = le.transform(df['Transmission'])
+    df = scaler.transform(df)
+    prediction = model.predict(df)
+    return jsonify({'selling_price': prediction[0]})
+
+if __name__ == '__main__':
+    app.run(debug=True)
+    
